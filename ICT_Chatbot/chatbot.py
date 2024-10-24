@@ -1,101 +1,133 @@
-
 # chatbot.py
 import re
+import json
+import random
 from database_setup import Database
 
-class Chatbot:
+class ICTTutoringChatbot:
     def __init__(self):
         self.db = Database()
-        self.initialize_responses()
+        self.current_topic = None
     
-    def initialize_responses(self):
-        """Initialize basic responses"""
-        basic_responses = [
-            # Greetings
-            ("hello", "Hi! How can I help you today?"),
-            ("hi", "Hello! What can I do for you?"),
-            ("hey", "Hey there! How can I assist you?"),
-            ("good morning", "Good morning! How can I help you today?"),
-            ("good afternoon", "Good afternoon! What can I do for you?"),
-            ("good evening", "Good evening! How may I assist you?"),
-            
-            # Farewells
-            ("bye", "Goodbye! Have a great day!"),
-            ("goodbye", "Bye! Hope to chat with you again soon!"),
-            ("see you", "See you later! Take care!"),
-            
-            # General queries
-            ("how are you", "I'm doing well, thank you for asking! How about you?"),
-            ("what's up", "Not much, just here to help! What's on your mind?"),
-            ("who are you", "I'm an ICT chatbot created to help answer your questions!"),
-            
-            # Help and Support
-            ("help", "I can help you with various topics. Just ask me a question!"),
-            ("what can you do", "I can provide information about various ICT topics, answer general questions, and assist with basic queries."),
-            ("menu", "Here are some things I can help with:\n1. General information\n2. Technical support\n3. Basic conversation"),
-            
-            # ICT-specific queries
-            ("what is ict", "ICT stands for Information and Communication Technology. It includes all digital technology that assists individuals, businesses, and organizations in using information."),
-            ("computer", "A computer is an electronic device that processes data according to instructions stored in its memory."),
-            ("programming", "Programming is the process of creating a set of instructions that tell a computer how to perform a task."),
-            ("internet", "The Internet is a global network of connected computers that allows information sharing and communication worldwide."),
-            
-            # Technical Support
-            ("error", "Could you please describe the error you're experiencing in detail? I'll try my best to help."),
-            ("not working", "I'm sorry to hear that. Could you tell me what exactly isn't working? This will help me assist you better."),
-            ("how to fix", "To help you fix the issue, I'll need more specific information about what you're trying to fix."),
-            
-            # Common Questions
-            ("weather", "I'm sorry, I don't have access to real-time weather information. Please check a weather website or app."),
-            ("time", "I don't have access to real-time information, but you can check the time on your device."),
-            ("thank you", "You're welcome! Is there anything else I can help you with?"),
-            ("thanks", "You're welcome! Let me know if you need anything else!"),
-            
-            # Educational Topics
-            ("what is coding", "Coding is the process of writing instructions for computers using programming languages. It's how we create software, websites, and apps."),
-            ("what is database", "A database is an organized collection of structured information or data, typically stored electronically in a computer system."),
-            ("what is network", "A network is a collection of computers and other devices that are connected together to share resources and communicate."),
-            
-            # Problem-solving
-            ("slow computer", "Here are some tips to speed up your computer:\n1. Close unused programs\n2. Delete temporary files\n3. Run virus scan\n4. Check available storage"),
-            ("virus", "To protect from viruses:\n1. Use antivirus software\n2. Keep software updated\n3. Be careful with downloads\n4. Don't click suspicious links"),
-            ("backup", "It's important to backup your data regularly. You can use:\n1. External hard drives\n2. Cloud storage\n3. Network storage"),
-            
-            # Fun responses
-            ("tell me a joke", "Why don't programmers like nature? It has too many bugs! 😄"),
-            ("are you human", "No, I'm a chatbot - a computer program designed to help and chat with you!"),
-            ("do you sleep", "I don't sleep - I'm always here to help!")
-        ]
-        
-        for pattern, response in basic_responses:
-            self.db.add_response(pattern, response)
+    def get_topics(self):
+        """Get list of available topics"""
+        self.db.cur.execute("SELECT topic_name, difficulty_level, description FROM topics")
+        return self.db.cur.fetchall()
     
-    def get_response(self, user_input):
-        """Generate a response to user input"""
-        # Convert to lowercase for better matching
-        user_input = user_input.lower().strip()
+    def start_topic(self, topic_name):
+        """Start learning a specific topic with improved matching"""
+        # Make the search case-insensitive
+        self.db.cur.execute("""
+        SELECT id, topic_name, description 
+        FROM topics 
+        WHERE LOWER(topic_name) = LOWER(?)
+        """, (topic_name,))
+        topic = self.db.cur.fetchone()
         
-        # Try to find a matching response in the database
-        response = self.db.get_response(user_input)
+        if topic:
+            self.current_topic = topic[0]
+            return f"Let's start learning about {topic[1]}!\n{topic[2]}\nType 'quiz' when you're ready to test your knowledge."
         
-        if response:
+        # If exact match not found, try partial matching
+        self.db.cur.execute("""
+        SELECT id, topic_name, description 
+        FROM topics 
+        WHERE LOWER(topic_name) LIKE LOWER(?)
+        """, (f"%{topic_name}%",))
+        topics = self.db.cur.fetchall()
+        
+        if topics:
+            if len(topics) == 1:
+                self.current_topic = topics[0][0]
+                return f"Let's start learning about {topics[0][1]}!\n{topics[0][2]}\nType 'quiz' when you're ready to test your knowledge."
+            else:
+                response = "Did you mean one of these topics?\n"
+                for t in topics:
+                    response += f"- {t[1]}\n"
+                return response
+        
+        return "Topic not found. Type 'topics' to see available topics."
+    
+    def take_quiz(self):
+        """Start a quiz for the current topic"""
+        if not self.current_topic:
+            return "Please select a topic first using 'start topic_name'"
+        
+        self.db.cur.execute("""
+        SELECT question, correct_answer, options 
+        FROM quizzes 
+        WHERE topic_id = ?
+        """, (self.current_topic,))
+        questions = self.db.cur.fetchall()
+        
+        if not questions:
+            return "No quiz questions available for this topic."
+        
+        question = random.choice(questions)
+        options = json.loads(question[2])
+        
+        quiz_text = f"\nQuestion: {question[0]}\n\n"
+        for i, option in enumerate(options, 1):
+            quiz_text += f"{i}. {option}\n"
+        quiz_text += "\nType the number of your answer."
+        
+        return quiz_text
+    
+    def process_command(self, user_input):
+        """Process user commands and generate responses"""
+        command = user_input.lower().strip()
+        
+        if command == "topics":
+            topics = self.get_topics()
+            response = "Available Topics:\n\n"
+            for topic in topics:
+                response += f"📚 {topic[0]} ({topic[1]})\n   {topic[2]}\n\n"
+            response += "Type 'start topic_name' to begin learning!"
             return response
-        else:
-            return "I'm not sure how to respond to that. Could you rephrase your question?"
+            
+        if command.startswith("start "):
+            topic_name = command[6:].strip()
+            return self.start_topic(topic_name)
+            
+        if command == "quiz":
+            return self.take_quiz()
+            
+        if command == "help":
+            return """Available commands:
+- topics: Show all available ICT topics
+- start topic_name: Begin learning a specific topic
+- quiz: Take a quiz on the current topic
+- help: Show this help message
+- bye: Exit the chatbot"""
+        
+        return "I'm not sure what you mean. Type 'help' to see available commands."
 
     def run(self):
-        """Run the chatbot in an interactive loop"""
-        print("Chatbot: Hello! Type 'bye' to exit.")
+        """Run the ICT tutoring chatbot"""
+        print("="*50)
+        print("Welcome to the ICT Tutoring Chatbot!")
+        print("Type 'help' to see available commands")
+        print("="*50)
         
         while True:
-            user_input = input("You: ")
-            if user_input.lower() == 'bye':
-                print("Chatbot: Goodbye!")
-                break
+            try:
+                user_input = input("\nYou: ").strip()
                 
-            response = self.get_response(user_input)
-            print("Chatbot:", response)
+                if user_input.lower() == "bye":
+                    print("\nChatbot: Thanks for learning with me! Goodbye!")
+                    break
+                
+                response = self.process_command(user_input)
+                print(f"\nChatbot: {response}")
+                
+            except KeyboardInterrupt:
+                print("\n\nChatbot: Goodbye! Learning session ended.")
+                break
+            except Exception as e:
+                print(f"\nChatbot: Sorry, I encountered an error. Please try again.")
+                print(f"Error details: {str(e)}")
 
 if __name__ == "__main__":
-    chatbot = Chatbot()
+    chatbot = ICTTutoringChatbot()
     chatbot.run()
+
